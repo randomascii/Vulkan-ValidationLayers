@@ -170,6 +170,24 @@ void GetBufferRange(VkDeviceSize &range_start, VkDeviceSize &range_size, VkDevic
     }
 }
 
+SyncStageAccessIndex GetSyncStageAccessIndexsByDescriptorSet(VkDescriptorType descriptor_type, const interface_var &descriptor_data,
+                                                             VkShaderStageFlagBits stage_flag) {
+    if (descriptor_type == VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT) {
+        return {SYNC_FRAGMENT_SHADER_INPUT_ATTACHMENT_READ};
+    }
+    auto stage_access = syncStageAccessMaskByShaderStage.find(stage_flag);
+    if (stage_access == syncStageAccessMaskByShaderStage.end()) {
+        assert(0);
+    }
+    if (descriptor_type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER || descriptor_type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC) {
+        return {stage_access->second.uniform_read};
+    }
+    if (descriptor_data.is_writable) {
+        return {stage_access->second.shader_write};
+    }
+    return {stage_access->second.shader_read};
+}
+
 // Class AccessContext stores the state of accesses specific to a Command, Subpass, or Queue
 const std::array<AccessContext::AddressType, AccessContext::kAddressTypeCount> AccessContext::kAddressTypes = {
     AccessContext::AddressType::kLinearAddress, AccessContext::AddressType::kIdealizedAddress};
@@ -1802,8 +1820,8 @@ bool SyncValidator::PreCallValidateCmdCopyBuffer(VkCommandBuffer commandBuffer, 
     for (uint32_t region = 0; region < regionCount; region++) {
         const auto &copy_region = pRegions[region];
         if (src_buffer) {
-            ResourceAccessRange src_range =
-                MakeRange(copy_region.srcOffset, GetRealWholeSize(copy_region.srcOffset, copy_region.size, src_buffer->createInfo.size));
+            ResourceAccessRange src_range = MakeRange(
+                copy_region.srcOffset, GetRealWholeSize(copy_region.srcOffset, copy_region.size, src_buffer->createInfo.size));
             auto hazard = context->DetectHazard(*src_buffer, SYNC_TRANSFER_TRANSFER_READ, src_range);
             if (hazard.hazard) {
                 // TODO -- add tag information to log msg when useful.
@@ -1813,8 +1831,8 @@ bool SyncValidator::PreCallValidateCmdCopyBuffer(VkCommandBuffer commandBuffer, 
             }
         }
         if (dst_buffer && !skip) {
-            ResourceAccessRange dst_range =
-                MakeRange(copy_region.dstOffset, GetRealWholeSize(copy_region.dstOffset, copy_region.size, dst_buffer->createInfo.size));
+            ResourceAccessRange dst_range = MakeRange(
+                copy_region.dstOffset, GetRealWholeSize(copy_region.dstOffset, copy_region.size, dst_buffer->createInfo.size));
             auto hazard = context->DetectHazard(*dst_buffer, SYNC_TRANSFER_TRANSFER_WRITE, dst_range);
             if (hazard.hazard) {
                 skip |= LogError(dstBuffer, string_SyncHazardVUID(hazard.hazard),
@@ -1840,13 +1858,13 @@ void SyncValidator::PreCallRecordCmdCopyBuffer(VkCommandBuffer commandBuffer, Vk
     for (uint32_t region = 0; region < regionCount; region++) {
         const auto &copy_region = pRegions[region];
         if (src_buffer) {
-            ResourceAccessRange src_range =
-                MakeRange(copy_region.srcOffset, GetRealWholeSize(copy_region.srcOffset, copy_region.size, src_buffer->createInfo.size));
+            ResourceAccessRange src_range = MakeRange(
+                copy_region.srcOffset, GetRealWholeSize(copy_region.srcOffset, copy_region.size, src_buffer->createInfo.size));
             context->UpdateAccessState(*src_buffer, SYNC_TRANSFER_TRANSFER_READ, src_range, tag);
         }
         if (dst_buffer) {
-            ResourceAccessRange dst_range =
-                MakeRange(copy_region.dstOffset, GetRealWholeSize(copy_region.dstOffset, copy_region.size, dst_buffer->createInfo.size));
+            ResourceAccessRange dst_range = MakeRange(
+                copy_region.dstOffset, GetRealWholeSize(copy_region.dstOffset, copy_region.size, dst_buffer->createInfo.size));
             context->UpdateAccessState(*dst_buffer, SYNC_TRANSFER_TRANSFER_WRITE, dst_range, tag);
         }
     }
@@ -2455,13 +2473,11 @@ bool SyncValidator::DetectDescriptorSetHazard(const AccessContext &context, cons
     using ImageSamplerDescriptor = cvdescriptorset::ImageSamplerDescriptor;
     using TexelDescriptor = cvdescriptorset::TexelDescriptor;
 
-    for (const auto &set_binding_pair : pPipe->active_slots) {
-        uint32_t setIndex = set_binding_pair.first;
-        cvdescriptorset::DescriptorSet *descriptor_set = (*per_sets)[setIndex].bound_descriptor_set;
-        for (auto binding_pair : set_binding_pair.second) {
-            auto binding = binding_pair.first;
+    for (const auto &stage_state : pPipe->stage_state) {
+        for (const auto &set_binding : stage_state.descriptor_uses) {
+            cvdescriptorset::DescriptorSet *descriptor_set = (*per_sets)[set_binding.first.first].bound_descriptor_set;
             cvdescriptorset::DescriptorSetLayout::ConstBindingIterator binding_it(descriptor_set->GetLayout().get(),
-                                                                                  binding_pair.first);
+                                                                                  set_binding.first.second);
             const auto descriptor_type = binding_it.GetType();
             cvdescriptorset::IndexRange index_range = binding_it.GetGlobalIndexRange();
             auto array_idx = 0;
@@ -2469,70 +2485,76 @@ bool SyncValidator::DetectDescriptorSetHazard(const AccessContext &context, cons
             if (binding_it.IsVariableDescriptorCount()) {
                 index_range.end = index_range.start + descriptor_set->GetVariableDescriptorCount();
             }
+            SyncStageAccessIndex sync_index =
+                GetSyncStageAccessIndexsByDescriptorSet(descriptor_type, set_binding.second, stage_state.stage_flag);
+
             for (uint32_t i = index_range.start; i < index_range.end; ++i, ++array_idx) {
                 uint32_t index = i - index_range.start;
                 const auto *descriptor = descriptor_set->GetDescriptorFromGlobalIndex(i);
-                if (descriptor->GetClass() == DescriptorClass::ImageSampler || descriptor->GetClass() == DescriptorClass::Image) {
-                    const IMAGE_VIEW_STATE *img_view_state = nullptr;
-                    if (descriptor->GetClass() == DescriptorClass::ImageSampler) {
-                        img_view_state = static_cast<const ImageSamplerDescriptor *>(descriptor)->GetImageViewState();
-                    } else {
-                        img_view_state = static_cast<const ImageDescriptor *>(descriptor)->GetImageViewState();
+                switch (descriptor->GetClass()) {
+                    case DescriptorClass::ImageSampler:
+                    case DescriptorClass::Image: {
+                        const IMAGE_VIEW_STATE *img_view_state = nullptr;
+                        if (descriptor->GetClass() == DescriptorClass::ImageSampler) {
+                            img_view_state = static_cast<const ImageSamplerDescriptor *>(descriptor)->GetImageViewState();
+                        } else {
+                            img_view_state = static_cast<const ImageDescriptor *>(descriptor)->GetImageViewState();
+                        }
+                        if (!img_view_state) continue;
+                        const IMAGE_STATE *img_state = img_view_state->image_state.get();
+                        auto hazard = context.DetectHazard(*img_state, sync_index, img_view_state->normalized_subresource_range,
+                                                           {0, 0, 0}, img_state->createInfo.extent);
+                        if (hazard.hazard) {
+                            skip |= LogError(
+                                img_view_state->image_view, string_SyncHazardVUID(hazard.hazard),
+                                "%s: Hazard %s for %s in %s, %s, and %s binding #%d index %d", function,
+                                string_SyncHazard(hazard.hazard), report_data->FormatHandle(img_view_state->image_view).c_str(),
+                                report_data->FormatHandle(cmd.commandBuffer).c_str(),
+                                report_data->FormatHandle(pPipe->pipeline).c_str(),
+                                report_data->FormatHandle(descriptor_set->GetSet()).c_str(), set_binding.first.second, index);
+                        }
+                        break;
                     }
-                    if (!img_view_state) continue;
-                    SyncStageAccessIndex sync_index;
-                    if (descriptor_type == VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT) {
-                        sync_index = SYNC_FRAGMENT_SHADER_INPUT_ATTACHMENT_READ;
-                    } else {
-                        sync_index = SYNC_VERTEX_SHADER_SHADER_READ;
+                    case DescriptorClass::TexelBuffer: {
+                        auto buf_view_state = static_cast<const TexelDescriptor *>(descriptor)->GetBufferViewState();
+                        if (!buf_view_state) continue;
+                        const BUFFER_STATE *buf_state = buf_view_state->buffer_state.get();
+                        ResourceAccessRange range =
+                            MakeRange(buf_view_state->create_info.offset,
+                                      GetRealWholeSize(buf_view_state->create_info.offset, buf_view_state->create_info.range,
+                                                       buf_state->createInfo.size));
+                        auto hazard = context.DetectHazard(*buf_state, sync_index, range);
+                        if (hazard.hazard) {
+                            skip |= LogError(
+                                buf_view_state->buffer_view, string_SyncHazardVUID(hazard.hazard),
+                                "%s: Hazard %s for %s in %s, %s, and %s binding #%d index %d", function,
+                                string_SyncHazard(hazard.hazard), report_data->FormatHandle(buf_view_state->buffer_view).c_str(),
+                                report_data->FormatHandle(cmd.commandBuffer).c_str(),
+                                report_data->FormatHandle(pPipe->pipeline).c_str(),
+                                report_data->FormatHandle(descriptor_set->GetSet()).c_str(), set_binding.first.second, index);
+                        }
+                        break;
                     }
-                    const IMAGE_STATE *img_state = img_view_state->image_state.get();
-                    auto hazard = context.DetectHazard(*img_state, sync_index, img_view_state->normalized_subresource_range,
-                                                       {0, 0, 0}, img_state->createInfo.extent);
-                    if (hazard.hazard) {
-                        skip |= LogError(img_view_state->image_view, string_SyncHazardVUID(hazard.hazard),
-                                         "%s: Hazard %s for %s in %s and %s binding #%d index %d", function,
-                                         string_SyncHazard(hazard.hazard),
-                                         report_data->FormatHandle(img_view_state->image_view).c_str(),
-                                         report_data->FormatHandle(cmd.commandBuffer).c_str(),
-                                         report_data->FormatHandle(descriptor_set->GetSet()).c_str(), binding, index);
+                    case DescriptorClass::GeneralBuffer: {
+                        const auto *buffer_descriptor = static_cast<const BufferDescriptor *>(descriptor);
+                        auto buf_state = buffer_descriptor->GetBufferState();
+                        if (!buf_state) continue;
+                        ResourceAccessRange range = MakeRange(buffer_descriptor->GetOffset(), buffer_descriptor->GetRange());
+                        auto hazard = context.DetectHazard(*buf_state, sync_index, range);
+                        if (hazard.hazard) {
+                            skip |= LogError(buf_state->buffer, string_SyncHazardVUID(hazard.hazard),
+                                             "%s: Hazard %s for %s in %s, %s, and %s binding #%d index %d", function,
+                                             string_SyncHazard(hazard.hazard), report_data->FormatHandle(buf_state->buffer).c_str(),
+                                             report_data->FormatHandle(cmd.commandBuffer).c_str(),
+                                             report_data->FormatHandle(pPipe->pipeline).c_str(),
+                                             report_data->FormatHandle(descriptor_set->GetSet()).c_str(), set_binding.first.second,
+                                             index);
+                        }
+                        break;
                     }
-                } else if (descriptor->GetClass() == DescriptorClass::TexelBuffer) {
-                    auto buf_view_state = static_cast<const TexelDescriptor *>(descriptor)->GetBufferViewState();
-                    if (!buf_view_state) continue;
-                    const BUFFER_STATE *buf_state = buf_view_state->buffer_state.get();
-                    ResourceAccessRange range =
-                        MakeRange(buf_view_state->create_info.offset,
-                                  GetRealWholeSize(buf_view_state->create_info.offset, buf_view_state->create_info.range,
-                                                   buf_state->createInfo.size));
-                    auto hazard = context.DetectHazard(*buf_state, SYNC_VERTEX_SHADER_SHADER_READ, range);
-                    if (hazard.hazard) {
-                        skip |= LogError(buf_view_state->buffer_view, string_SyncHazardVUID(hazard.hazard),
-                                         "%s: Hazard %s for %s in %s and %s binding #%d index %d", function,
-                                         string_SyncHazard(hazard.hazard),
-                                         report_data->FormatHandle(buf_view_state->buffer_view).c_str(),
-                                         report_data->FormatHandle(cmd.commandBuffer).c_str(),
-                                         report_data->FormatHandle(descriptor_set->GetSet()).c_str(), binding, index);
-                    }
-                } else if (descriptor->GetClass() == DescriptorClass::GeneralBuffer) {
-                    auto buf_state = static_cast<const BufferDescriptor *>(descriptor)->GetBufferState();
-                    if (!buf_state) continue;
-                    ResourceAccessRange range = MakeRange(0, buf_state->createInfo.size);
-                    SyncStageAccessIndex sync_index;
-                    if (descriptor_type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER ||
-                        descriptor_type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC) {
-                        sync_index = SYNC_VERTEX_SHADER_UNIFORM_READ;
-                    } else {
-                        sync_index = SYNC_VERTEX_SHADER_SHADER_READ;
-                    }
-                    auto hazard = context.DetectHazard(*buf_state, sync_index, range);
-                    if (hazard.hazard) {
-                        skip |= LogError(buf_state->buffer, string_SyncHazardVUID(hazard.hazard),
-                                         "%s: Hazard %s for %s in %s and %s binding #%d index %d", function,
-                                         string_SyncHazard(hazard.hazard), report_data->FormatHandle(buf_state->buffer).c_str(),
-                                         report_data->FormatHandle(cmd.commandBuffer).c_str(),
-                                         report_data->FormatHandle(descriptor_set->GetSet()).c_str(), binding, index);
-                    }
+                    // TODO: INLINE_UNIFORM_BLOCK_EXT, ACCELERATION_STRUCTURE_KHR
+                    default:
+                        break;
                 }
             }
         }
@@ -2555,12 +2577,11 @@ void SyncValidator::UpdateDescriptorSetAccessState(AccessContext &context, const
     using ImageSamplerDescriptor = cvdescriptorset::ImageSamplerDescriptor;
     using TexelDescriptor = cvdescriptorset::TexelDescriptor;
 
-    for (const auto &set_binding_pair : pPipe->active_slots) {
-        uint32_t setIndex = set_binding_pair.first;
-        const cvdescriptorset::DescriptorSet *descriptor_set = (*per_sets)[setIndex].bound_descriptor_set;
-        for (auto binding_pair : set_binding_pair.second) {
+    for (const auto &stage_state : pPipe->stage_state) {
+        for (const auto &set_binding : stage_state.descriptor_uses) {
+            cvdescriptorset::DescriptorSet *descriptor_set = (*per_sets)[set_binding.first.first].bound_descriptor_set;
             cvdescriptorset::DescriptorSetLayout::ConstBindingIterator binding_it(descriptor_set->GetLayout().get(),
-                                                                                  binding_pair.first);
+                                                                                  set_binding.first.second);
             const auto descriptor_type = binding_it.GetType();
             cvdescriptorset::IndexRange index_range = binding_it.GetGlobalIndexRange();
             auto array_idx = 0;
@@ -2568,46 +2589,46 @@ void SyncValidator::UpdateDescriptorSetAccessState(AccessContext &context, const
             if (binding_it.IsVariableDescriptorCount()) {
                 index_range.end = index_range.start + descriptor_set->GetVariableDescriptorCount();
             }
+            SyncStageAccessIndex sync_index =
+                GetSyncStageAccessIndexsByDescriptorSet(descriptor_type, set_binding.second, stage_state.stage_flag);
 
             for (uint32_t i = index_range.start; i < index_range.end; ++i, ++array_idx) {
                 const auto *descriptor = descriptor_set->GetDescriptorFromGlobalIndex(i);
-                if (descriptor->GetClass() == DescriptorClass::ImageSampler || descriptor->GetClass() == DescriptorClass::Image) {
-                    const IMAGE_VIEW_STATE *img_view_state = nullptr;
-                    if (descriptor->GetClass() == DescriptorClass::ImageSampler) {
-                        img_view_state = static_cast<const ImageSamplerDescriptor *>(descriptor)->GetImageViewState();
-                    } else {
-                        img_view_state = static_cast<const ImageDescriptor *>(descriptor)->GetImageViewState();
+                switch (descriptor->GetClass()) {
+                    case DescriptorClass::ImageSampler:
+                    case DescriptorClass::Image: {
+                        const IMAGE_VIEW_STATE *img_view_state = nullptr;
+                        if (descriptor->GetClass() == DescriptorClass::ImageSampler) {
+                            img_view_state = static_cast<const ImageSamplerDescriptor *>(descriptor)->GetImageViewState();
+                        } else {
+                            img_view_state = static_cast<const ImageDescriptor *>(descriptor)->GetImageViewState();
+                        }
+                        if (!img_view_state) continue;
+                        const IMAGE_STATE *img_state = img_view_state->image_state.get();
+                        context.UpdateAccessState(*img_state, sync_index, img_view_state->normalized_subresource_range, {0, 0, 0},
+                                                  img_state->createInfo.extent, tag);
+                        break;
                     }
-                    if (!img_view_state) continue;
-                    SyncStageAccessIndex sync_index;
-                    if (descriptor_type == VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT) {
-                        sync_index = SYNC_FRAGMENT_SHADER_INPUT_ATTACHMENT_READ;
-                    } else {
-                        sync_index = SYNC_VERTEX_SHADER_SHADER_READ;
+                    case DescriptorClass::TexelBuffer: {
+                        auto buf_view_state = static_cast<const TexelDescriptor *>(descriptor)->GetBufferViewState();
+                        if (!buf_view_state) continue;
+                        const BUFFER_STATE *buf_state = buf_view_state->buffer_state.get();
+                        ResourceAccessRange range =
+                            MakeRange(buf_view_state->create_info.offset, buf_view_state->create_info.range);
+                        context.UpdateAccessState(*buf_state, sync_index, range, tag);
+                        break;
                     }
-                    const IMAGE_STATE *img_state = img_view_state->image_state.get();
-                    context.UpdateAccessState(*img_state, sync_index, img_view_state->normalized_subresource_range, {0, 0, 0},
-                                              img_state->createInfo.extent, tag);
-
-                } else if (descriptor->GetClass() == DescriptorClass::TexelBuffer) {
-                    auto buf_view_state = static_cast<const TexelDescriptor *>(descriptor)->GetBufferViewState();
-                    if (!buf_view_state) continue;
-                    const BUFFER_STATE *buf_state = buf_view_state->buffer_state.get();
-                    ResourceAccessRange range = MakeRange(buf_view_state->create_info.offset, buf_view_state->create_info.range);
-                    context.UpdateAccessState(*buf_state, SYNC_VERTEX_SHADER_SHADER_READ, range, tag);
-
-                } else if (descriptor->GetClass() == DescriptorClass::GeneralBuffer) {
-                    auto buf_state = static_cast<const BufferDescriptor *>(descriptor)->GetBufferState();
-                    if (!buf_state) continue;
-                    SyncStageAccessIndex sync_index;
-                    if (descriptor_type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER ||
-                        descriptor_type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC) {
-                        sync_index = SYNC_VERTEX_SHADER_UNIFORM_READ;
-                    } else {
-                        sync_index = SYNC_VERTEX_SHADER_SHADER_READ;
+                    case DescriptorClass::GeneralBuffer: {
+                        const auto *buffer_descriptor = static_cast<const BufferDescriptor *>(descriptor);
+                        auto buf_state = buffer_descriptor->GetBufferState();
+                        if (!buf_state) continue;
+                        ResourceAccessRange range = MakeRange(buffer_descriptor->GetOffset(), buffer_descriptor->GetRange());
+                        context.UpdateAccessState(*buf_state, sync_index, range, tag);
+                        break;
                     }
-                    ResourceAccessRange range = MakeRange(0, buf_state->createInfo.size);
-                    context.UpdateAccessState(*buf_state, sync_index, range, tag);
+                    // TODO: INLINE_UNIFORM_BLOCK_EXT, ACCELERATION_STRUCTURE_KHR
+                    default:
+                        break;
                 }
             }
         }
@@ -2798,8 +2819,8 @@ void SyncValidator::UpdateSubpassAttachmentAccessState(AccessContext &context, c
     VkExtent3D framebuffer_extent = {framebuffer->createInfo.width, framebuffer->createInfo.height, framebuffer->createInfo.layers};
 
     auto updt_fn = [&framebuffer, &framebuffer_extent, &context, &tag](const SyncValidator &this_,
-                                                                      const safe_VkAttachmentReference2 &attachment_ref,
-                                                                      const SyncStageAccessIndex sync_index) {
+                                                                       const safe_VkAttachmentReference2 &attachment_ref,
+                                                                       const SyncStageAccessIndex sync_index) {
         if (attachment_ref.attachment == VK_ATTACHMENT_UNUSED) return;
         auto attachment_index = attachment_ref.attachment;
         if (framebuffer->createInfo.attachmentCount > attachment_index) {
