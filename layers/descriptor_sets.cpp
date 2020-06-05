@@ -765,7 +765,7 @@ bool CoreChecks::ValidateDescriptorSetBindingData(const CMD_BUFFER_STATE *cb_nod
                     if (buffer) {
                         if (!buffer_node || buffer_node->destroyed) {
                             auto set = descriptor_set->GetSet();
-                            return LogError(set, kVUID_Core_DrawState_DescriptorSetNotUpdated,
+                            return LogError(set, vuids.invalid_descriptor_set,
                                             "%s encountered the following validation error at %s time: Descriptor in "
                                             "binding #%" PRIu32 " index %" PRIu32
                                             " is using buffer %s that is invalid or has been destroyed.",

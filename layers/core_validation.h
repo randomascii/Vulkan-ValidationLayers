@@ -44,6 +44,7 @@ struct DrawDispatchVuid {
     const char* sample_location;
     const char* linear_sampler;
     const char* cubic_sampler;
+    const char* invalid_descriptor_set;
 };
 
 class CoreChecks : public ValidationStateTracker {
