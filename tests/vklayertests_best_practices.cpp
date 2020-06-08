@@ -483,6 +483,11 @@ TEST_F(VkBestPracticesLayerTest, AttachmentShouldNotBeTransient) {
     InitBestPracticesFramework();
     InitState();
 
+    if (IsPlatform(kPixel2XL)) {
+        printf("%s This test should not run on Pixel 2 XL\n", kSkipPrefix);
+        return;
+    }
+
     m_errorMonitor->SetDesiredFailureMsg(kPerformanceWarningBit,
                                          "UNASSIGNED-BestPractices-vkCreateFramebuffer-attachment-should-not-be-transient");
 
