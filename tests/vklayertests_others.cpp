@@ -27,13 +27,33 @@
 #include "cast_utils.h"
 #include "layer_validation_tests.h"
 
+class MessageIdFilter {
+  public:
+    MessageIdFilter(const char *filter_string) {
+        filter_string_value.valueString = filter_string;
+        filter_setting_val.sType = static_cast<VkStructureType>(VK_STRUCTURE_TYPE_LAYER_SETTING_VALUE_EXT);
+        strncpy(filter_setting_val.settingName, "message_id_filter", sizeof(filter_setting_val.settingName));
+        filter_setting_val.type = VK_LAYER_SETTING_VALUE_TYPE_STRING_EXT;
+        filter_setting_val.data = filter_string_value;
+        filter_setting = {static_cast<VkStructureType>(VK_STRUCTURE_TYPE_INSTANCE_LAYER_SETTINGS_EXT), nullptr, 1,
+                          &filter_setting_val};
+    }
+    VkInstanceLayerSettingsEXT *pnext{&filter_setting};
+
+  private:
+    VkLayerSettingValueDataEXT filter_string_value{};
+    VkLayerSettingValueEXT filter_setting_val;
+    VkInstanceLayerSettingsEXT filter_setting;
+};
+
 TEST_F(VkLayerTest, MessageIdFilterString) {
     TEST_DESCRIPTION("Validate that message id string filtering is working");
 
     // This test would normally produce an unexpected error or two.  Use the message filter instead of
     // the error_monitor's SetUnexpectedError to test the filtering.
-    SetEnvVar("VK_LAYER_MESSAGE_ID_FILTER", "VUID-VkRenderPassCreateInfo-pNext-01963");
-    ASSERT_NO_FATAL_FAILURE(InitFramework(m_errorMonitor));
+    auto filter_setting = MessageIdFilter("VUID-VkRenderPassCreateInfo-pNext-01963");
+    ASSERT_NO_FATAL_FAILURE(InitFramework(m_errorMonitor, filter_setting.pnext));
+
     if (DeviceExtensionSupported(gpu(), nullptr, VK_KHR_MAINTENANCE2_EXTENSION_NAME)) {
         m_device_extension_names.push_back(VK_KHR_MAINTENANCE2_EXTENSION_NAME);
     } else {
@@ -56,11 +76,9 @@ TEST_F(VkLayerTest, MessageIdFilterString) {
     VkRenderPassInputAttachmentAspectCreateInfo rpiaaci = {VK_STRUCTURE_TYPE_RENDER_PASS_INPUT_ATTACHMENT_ASPECT_CREATE_INFO,
                                                            nullptr, 1, &iaar};
     VkRenderPassCreateInfo rpci = {VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO, &rpiaaci, 0, 1, &attach, 1, &subpass, 0, nullptr};
-    SetEnvVar("VK_LAYER_MESSAGE_ID_FILTER", "VUID-VkRenderPassCreateInfo-pNext-01963");
     m_errorMonitor->SetUnexpectedError("VUID-VkRenderPassCreateInfo2-attachment-02525");
     TestRenderPassCreate(m_errorMonitor, m_device->device(), &rpci, false, "VUID-VkInputAttachmentAspectReference-aspectMask-01964",
                          nullptr);
-    SetEnvVar("VK_LAYER_MESSAGE_ID_FILTER", "");
 }
 
 TEST_F(VkLayerTest, MessageIdFilterHexInt) {
@@ -68,8 +86,9 @@ TEST_F(VkLayerTest, MessageIdFilterHexInt) {
 
     // This test would normally produce an unexpected error or two.  Use the message filter instead of
     // the error_monitor's SetUnexpectedError to test the filtering.
-    SetEnvVar("VK_LAYER_MESSAGE_ID_FILTER", "0xa19880e3");
-    ASSERT_NO_FATAL_FAILURE(InitFramework(m_errorMonitor));
+    auto filter_setting = MessageIdFilter("0xa19880e3");
+    ASSERT_NO_FATAL_FAILURE(InitFramework(m_errorMonitor, filter_setting.pnext));
+
     if (DeviceExtensionSupported(gpu(), nullptr, VK_KHR_MAINTENANCE2_EXTENSION_NAME)) {
         m_device_extension_names.push_back(VK_KHR_MAINTENANCE2_EXTENSION_NAME);
     } else {
@@ -95,7 +114,6 @@ TEST_F(VkLayerTest, MessageIdFilterHexInt) {
     m_errorMonitor->SetUnexpectedError("VUID-VkRenderPassCreateInfo2-attachment-02525");
     TestRenderPassCreate(m_errorMonitor, m_device->device(), &rpci, false, "VUID-VkInputAttachmentAspectReference-aspectMask-01964",
                          nullptr);
-    SetEnvVar("VK_LAYER_MESSAGE_ID_FILTER", "");
 }
 
 TEST_F(VkLayerTest, MessageIdFilterInt) {
@@ -103,8 +121,9 @@ TEST_F(VkLayerTest, MessageIdFilterInt) {
 
     // This test would normally produce an unexpected error or two.  Use the message filter instead of
     // the error_monitor's SetUnexpectedError to test the filtering.
-    SetEnvVar("VK_LAYER_MESSAGE_ID_FILTER", "2711126243");
-    ASSERT_NO_FATAL_FAILURE(InitFramework(m_errorMonitor));
+    auto filter_setting = MessageIdFilter("2711126243");
+    ASSERT_NO_FATAL_FAILURE(InitFramework(m_errorMonitor, filter_setting.pnext));
+
     if (DeviceExtensionSupported(gpu(), nullptr, VK_KHR_MAINTENANCE2_EXTENSION_NAME)) {
         m_device_extension_names.push_back(VK_KHR_MAINTENANCE2_EXTENSION_NAME);
     } else {
@@ -130,7 +149,6 @@ TEST_F(VkLayerTest, MessageIdFilterInt) {
     m_errorMonitor->SetUnexpectedError("VUID-VkRenderPassCreateInfo2-attachment-02525");
     TestRenderPassCreate(m_errorMonitor, m_device->device(), &rpci, false, "VUID-VkInputAttachmentAspectReference-aspectMask-01964",
                          nullptr);
-    SetEnvVar("VK_LAYER_MESSAGE_ID_FILTER", "");
 }
 
 struct LayerStatusCheckData {

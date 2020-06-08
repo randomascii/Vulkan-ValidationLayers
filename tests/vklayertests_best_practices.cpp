@@ -18,8 +18,14 @@
 
 void VkBestPracticesLayerTest::InitBestPracticesFramework() {
     // Enable all vendor-specific checks
-    SetEnvVar("VK_LAYER_ENABLES", "VALIDATION_CHECK_ENABLE_VENDOR_SPECIFIC_ALL");
-
+    VkLayerSettingValueDataEXT bp_setting_string_value{};
+    bp_setting_string_value.valueString = "VALIDATION_CHECK_ENABLE_VENDOR_SPECIFIC_ALL";
+    VkLayerSettingValueEXT bp_vendor_all_setting_val = {static_cast<VkStructureType>(VK_STRUCTURE_TYPE_LAYER_SETTING_VALUE_EXT),
+                                                        nullptr, "enables", VK_LAYER_SETTING_VALUE_TYPE_STRING_EXT,
+                                                        bp_setting_string_value};
+    VkInstanceLayerSettingsEXT bp_settings{static_cast<VkStructureType>(VK_STRUCTURE_TYPE_INSTANCE_LAYER_SETTINGS_EXT), nullptr, 1,
+                                           &bp_vendor_all_setting_val};
+    features_.pNext = &bp_settings;
     InitFramework(m_errorMonitor, &features_);
 }
 
