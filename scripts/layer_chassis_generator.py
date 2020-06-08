@@ -212,6 +212,7 @@ class LayerChassisOutputGenerator(OutputGenerator):
 
 #include "vk_loader_platform.h"
 #include "vulkan/vulkan.h"
+#include "vk_layer_settings_ext.h"
 #include "vk_layer_config.h"
 #include "vk_layer_data.h"
 #include "vk_layer_logging.h"
@@ -1010,6 +1011,20 @@ void ProcessConfigAndEnvSettings(const char* layer_description, CHECK_ENABLED &e
     CreateFilterMessageIdList(list_of_env_filter_ids, env_delimiter, message_filter_list);
 }
 
+const VkInstanceLayerSettingsEXT *FindSettingsInChain(const void *next) {
+    const VkBaseOutStructure *current = reinterpret_cast<const VkBaseOutStructure *>(next);
+    const VkInstanceLayerSettingsEXT *found = nullptr;
+    while (current) {
+        if (static_cast<VkStructureType>(VK_STRUCTURE_TYPE_INSTANCE_LAYER_SETTINGS_EXT) == current->sType) {
+            found = reinterpret_cast<const VkInstanceLayerSettingsEXT*>(current);
+            current = nullptr;
+        } else {
+            current = current->pNext;
+        }
+    }
+    return found;
+}
+
 void OutputLayerStatusInfo(ValidationObject *context) {
     std::string list_of_enables;
     std::string list_of_disables;
@@ -1138,6 +1153,22 @@ VKAPI_ATTR VkResult VKAPI_CALL CreateInstance(const VkInstanceCreateInfo *pCreat
     CHECK_ENABLED local_enables {};
     CHECK_DISABLED local_disables {};
 
+    const auto *instance_layer_settings_ext = FindSettingsInChain(pCreateInfo->pNext);
+    if (instance_layer_settings_ext) {
+        for (uint32_t i = 0; i < instance_layer_settings_ext->settingCount; i++) {
+            std::string name(instance_layer_settings_ext->pSetting[i].settingName);
+            if (name == "enables") {
+                std::string data(instance_layer_settings_ext->pSetting[i].data.valueString);
+                SetLocalEnableSetting(data, ",", local_enables);
+            } else if (name == "disables") {
+                std::string data(instance_layer_settings_ext->pSetting[i].data.valueString);
+                SetLocalDisableSetting(data, ",", local_disables);
+            } else if (name == "message_id_filter") {
+                std::string data(instance_layer_settings_ext->pSetting[i].data.valueString);
+                CreateFilterMessageIdList(data, ",", report_data->filter_message_ids);
+            }
+        }
+    }
     const auto *validation_features_ext = lvl_find_in_chain<VkValidationFeaturesEXT>(pCreateInfo->pNext);
     if (validation_features_ext) {
         SetValidationFeatures(local_disables, local_enables, validation_features_ext);
