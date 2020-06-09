@@ -594,33 +594,33 @@ class SyncValidator : public ValidationStateTracker, public SyncStageAccess {
                                    VkImageLayout dstImageLayout, uint32_t regionCount, const VkImageBlit *pRegions,
                                    VkFilter filter);
 
-    bool DetectDescriptorSetHazard(const AccessContext &context, const CMD_BUFFER_STATE &cmd, VkPipelineBindPoint pipelineBindPoint,
-                                   const char *function) const;
+    bool ValidateDescriptorSet(const AccessContext &context, const CMD_BUFFER_STATE &cmd, VkPipelineBindPoint pipelineBindPoint,
+                               const char *function) const;
     void UpdateDescriptorSetAccessState(AccessContext &context, const ResourceUsageTag &tag, const CMD_BUFFER_STATE &cmd,
                                         VkPipelineBindPoint pipelineBindPoint);
 
-    bool DetectVertexHazard(const AccessContext &context, const CMD_BUFFER_STATE &cmd, uint32_t vertexCount, uint32_t firstVertex,
-                            const char *function) const;
+    bool ValidateVertex(const AccessContext &context, const CMD_BUFFER_STATE &cmd, uint32_t vertexCount, uint32_t firstVertex,
+                        const char *function) const;
     void UpdateVertexAccessState(AccessContext &context, const ResourceUsageTag &tag, const CMD_BUFFER_STATE &cmd,
                                  uint32_t vertexCount, uint32_t firstVertex);
 
-    bool DetectVertexIndexHazard(const AccessContext &context, const CMD_BUFFER_STATE &cmd, uint32_t indexCount,
-                                 uint32_t firstIndex, const char *function) const;
+    bool ValidateVertexIndex(const AccessContext &context, const CMD_BUFFER_STATE &cmd, uint32_t indexCount, uint32_t firstIndex,
+                             const char *function) const;
     void UpdateVertexIndexAccessState(AccessContext &context, const ResourceUsageTag &tag, const CMD_BUFFER_STATE &cmd,
                                       uint32_t indexCount, uint32_t firstIndex);
 
-    bool DetectSubpassAttachmentHazard(const AccessContext &context, const CMD_BUFFER_STATE &cmd, const char *function) const;
+    bool ValidateSubpassAttachment(const AccessContext &context, const CMD_BUFFER_STATE &cmd, const char *function) const;
     void UpdateSubpassAttachmentAccessState(AccessContext &context, const ResourceUsageTag &tag, const CMD_BUFFER_STATE &cmd);
 
-    bool DetectIndirectBufferHazard(const AccessContext &context, VkCommandBuffer commandBuffer, const VkDeviceSize struct_size,
-                                    const VkBuffer buffer, const VkDeviceSize offset, const uint32_t drawCount,
-                                    const uint32_t stride, const char *function) const;
+    bool ValidateIndirectBuffer(const AccessContext &context, VkCommandBuffer commandBuffer, const VkDeviceSize struct_size,
+                                const VkBuffer buffer, const VkDeviceSize offset, const uint32_t drawCount, const uint32_t stride,
+                                const char *function) const;
     void UpdateIndirectBufferAccessState(AccessContext &context, const ResourceUsageTag &tag, const VkDeviceSize struct_size,
                                          const VkBuffer buffer, const VkDeviceSize offset, const uint32_t drawCount,
                                          uint32_t stride);
 
-    bool DetectCountBufferHazard(const AccessContext &context, VkCommandBuffer commandBuffer, VkBuffer buffer, VkDeviceSize offset,
-                                 const char *function) const;
+    bool ValidateCountBuffer(const AccessContext &context, VkCommandBuffer commandBuffer, VkBuffer buffer, VkDeviceSize offset,
+                             const char *function) const;
     void UpdateCountBufferAccessState(AccessContext &context, const ResourceUsageTag &tag, VkBuffer buffer, VkDeviceSize offset);
 
     bool PreCallValidateCmdDispatch(VkCommandBuffer commandBuffer, uint32_t x, uint32_t y, uint32_t z) const;
