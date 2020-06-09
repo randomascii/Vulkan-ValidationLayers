@@ -355,6 +355,8 @@ class RenderPassAccessContext {
     RenderPassAccessContext(AccessContext *external_context)
         : external_context_(external_context), rp_state_(nullptr), current_subpass_(0) {}
 
+    bool ValidateSubpassAttachment(const SyncValidator &sync_state, const CMD_BUFFER_STATE &cmd, const char *func_name) const;
+    void RecordSubpassAttachment(const ResourceUsageTag &tag);
     bool ValidateNextSubpass(const SyncValidator &sync_state, const VkRect2D &render_area, const char *command_name) const;
     bool ValidateEndRenderPass(const SyncValidator &sync_state, const VkRect2D &render_area, const char *func_name) const;
     bool ValidateFinalSubpassLayoutTransitions(const SyncValidator &sync_state, const VkRect2D &render_area,
@@ -377,9 +379,11 @@ class RenderPassAccessContext {
   private:
     AccessContext *external_context_;
     const RENDER_PASS_STATE *rp_state_;
+    const FRAMEBUFFER_STATE *fb_state_;
     uint32_t current_subpass_;
     std::vector<AccessContext> subpass_contexts_;
     std::vector<const IMAGE_VIEW_STATE *> attachment_views_;
+    VkExtent3D framebuffer_extent_;
 };
 
 class CommandBufferAccessContext {
@@ -414,6 +418,8 @@ class CommandBufferAccessContext {
     void RecordBeginRenderPass(const ResourceUsageTag &tag);
     bool ValidateBeginRenderPass(const RENDER_PASS_STATE &render_pass, const VkRenderPassBeginInfo *pRenderPassBegin,
                                  const VkSubpassBeginInfoKHR *pSubpassBeginInfo, const char *func_name) const;
+    bool ValidateSubpassAttachment(const char *func_name) const;
+    void RecordSubpassAttachment(const ResourceUsageTag &tag);
     bool ValidateNextSubpass(const char *func_name) const;
     bool ValidateEndRenderpass(const char *func_name) const;
     void RecordNextSubpass(const RENDER_PASS_STATE &render_pass, const ResourceUsageTag &tag);
@@ -608,9 +614,6 @@ class SyncValidator : public ValidationStateTracker, public SyncStageAccess {
                              const char *function) const;
     void UpdateVertexIndexAccessState(AccessContext &context, const ResourceUsageTag &tag, const CMD_BUFFER_STATE &cmd,
                                       uint32_t indexCount, uint32_t firstIndex);
-
-    bool ValidateSubpassAttachment(const AccessContext &context, const CMD_BUFFER_STATE &cmd, const char *function) const;
-    void UpdateSubpassAttachmentAccessState(AccessContext &context, const ResourceUsageTag &tag, const CMD_BUFFER_STATE &cmd);
 
     bool ValidateIndirectBuffer(const AccessContext &context, VkCommandBuffer commandBuffer, const VkDeviceSize struct_size,
                                 const VkBuffer buffer, const VkDeviceSize offset, const uint32_t drawCount, const uint32_t stride,
